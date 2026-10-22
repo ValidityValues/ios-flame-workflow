@@ -22,6 +22,14 @@ on:
     paths:
       - ".github/workflows/full-build.yml"
       - "tools/ci-full-build.sh"
+      - "tools/build-turnip-ios.sh"
+      - "tools/build-m2v-bridge.sh"
+      - "tools/mkadt.py"
+      - "tools/mkpayload.py"
+      - "tools/unpack_bootv2.py"
+      - "phone/**"
+      - "shim/**"
+      - "xnu/patches/**"
 
 permissions:
   contents: read
