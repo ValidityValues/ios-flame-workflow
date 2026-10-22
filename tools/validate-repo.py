@@ -1,30 +1,50 @@
 #!/usr/bin/env python3
-"""Validate repository integrity, patch sequences, and script syntax.
+"""Validate ios-flame patch sequencing and source script syntax.
 
-  tools/validate-repo.py [--verbose]
+Usage:
+  python3 tools/validate-repo.py [--verbose]
 
 Checks:
-  1. Patch sequence in xnu/patches/:
-     - Sequential numbering starting at 0001 with no duplicates or gaps.
-     - Patch files are non-empty and have valid unified diff markers.
-  2. Python script syntax:
-     - All tools/*.py compile cleanly via py_compile.
-  3. Shell script syntax:
-     - All tools/*.sh, shim/*.sh, and xnu/patches/*.sh pass bash -n check.
+  1. XNU patch sequence: contiguous numbering, no duplicates, valid patch headers.
+  2. Python syntax in tools/ and shim/.
+  3. Shell syntax in tools/, shim/, phone/, and xnu/patches/, including nested scripts.
 """
-import argparse, glob, os, py_compile, re, subprocess, sys
+import argparse
+import glob
+import os
+import py_compile
+import re
+import subprocess
+import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PYTHON_ROOTS = ("tools", "shim")
+SHELL_ROOTS = ("tools", "shim", "phone", "xnu/patches")
 
 
-def green(text): return f"\033[92m{text}\033[0m"
-def red(text): return f"\033[91m{text}\033[0m"
-def bold(text): return f"\033[1m{text}\033[0m"
+def green(value):
+    return "\033[92m" + value + "\033[0m"
+
+
+def red(value):
+    return "\033[91m" + value + "\033[0m"
+
+
+def bold(value):
+    return "\033[1m" + value + "\033[0m"
+
+
+def source_files(roots, suffix):
+    files = []
+    for root in roots:
+        pattern = os.path.join(REPO_ROOT, root, "**", "*" + suffix)
+        files.extend(glob.glob(pattern, recursive=True))
+    return sorted(set(path for path in files if os.path.isfile(path)))
 
 
 def validate_patches(verbose=False):
-    patch_dir = os.path.join(REPO_ROOT, 'xnu/patches')
-    patch_files = sorted(glob.glob(os.path.join(patch_dir, '*.patch')))
+    patch_dir = os.path.join(REPO_ROOT, "xnu", "patches")
+    patch_files = sorted(glob.glob(os.path.join(patch_dir, "*.patch")))
     if not patch_files:
         print(red("[-] Error: No patch files found in xnu/patches/"))
         return False
@@ -33,119 +53,143 @@ def validate_patches(verbose=False):
     seen_numbers = {}
 
     for path in patch_files:
-        fname = os.path.basename(path)
-        m = re.match(r'^(\d{4})-(.+)\.patch$', fname)
-        if not m:
-            errors.append(f"Invalid patch filename format: {fname}")
+        filename = os.path.basename(path)
+        match = re.match(r"^(\d{4})-(.+)\.patch$", filename)
+        if not match:
+            errors.append("Invalid patch filename format: " + filename)
             continue
 
-        num = int(m.group(1))
-        if num in seen_numbers:
-            errors.append(f"Duplicate patch number {num:04d}: {fname} and {seen_numbers[num]}")
-        seen_numbers[num] = fname
+        number = int(match.group(1))
+        if number in seen_numbers:
+            errors.append(
+                "Duplicate patch number %04d: %s and %s"
+                % (number, filename, seen_numbers[number])
+            )
+        seen_numbers[number] = filename
 
-        size = os.path.getsize(path)
-        if size == 0:
-            errors.append(f"Patch is empty: {fname}")
+        if os.path.getsize(path) == 0:
+            errors.append("Patch is empty: " + filename)
             continue
 
-        with open(path, 'r', errors='ignore') as f:
-            head = f.read(2048)
-            if not ('--- ' in head or 'diff ' in head or 'Index:' in head):
-                errors.append(f"Patch missing standard diff header: {fname}")
+        with open(path, "r", errors="ignore") as stream:
+            head = stream.read(2048)
+        if not ("--- " in head or "diff " in head or "Index:" in head):
+            errors.append("Patch missing standard diff header: " + filename)
+        if verbose:
+            print("    [PATCH] " + filename)
 
-    # Check contiguous sequence. flame folded a few numbers into the patch before them:
-    # 0090 into 0089, 0092-0093 into 0091, 0101 into 0100 (one commit each in the xnu tree).
+    # These numbers were folded into the preceding patch:
+    # 0090 into 0089, 0092-0093 into 0091, and 0101 into 0100.
     folded = {90, 92, 93, 101}
-    if seen_numbers:
-        sorted_nums = sorted(seen_numbers.keys())
-        expected = 1
-        for num in sorted_nums:
-            while expected in folded and expected != num:
-                expected += 1
-            if num != expected:
-                errors.append(f"Gap in patch sequence: expected {expected:04d}, found {num:04d} ({seen_numbers[num]})")
-                expected = num + 1
-            else:
-                expected += 1
+    expected = 1
+    for number in sorted(seen_numbers):
+        while expected in folded and expected != number:
+            expected += 1
+        if number != expected:
+            errors.append(
+                "Gap in patch sequence: expected %04d, found %04d (%s)"
+                % (expected, number, seen_numbers[number])
+            )
+            expected = number + 1
+        else:
+            expected += 1
 
     if errors:
-        print(red(f"[-] Patch validation failed with {len(errors)} error(s):"))
-        for err in errors:
-            print(f"    - {err}")
+        print(red("[-] Patch validation failed with %d error(s):" % len(errors)))
+        for error in errors:
+            print("    - " + error)
         return False
 
-    print(green(f"[✓] Validated {len(patch_files)} patches (0001-{max(seen_numbers):04d} contiguous, format OK)"))
+    print(
+        green(
+            "[+] Validated %d XNU patches (0001-%04d; folded numbers documented)"
+            % (len(patch_files), max(seen_numbers))
+        )
+    )
     return True
 
 
 def validate_python_scripts(verbose=False):
-    tools_dir = os.path.join(REPO_ROOT, 'tools')
-    py_files = sorted(glob.glob(os.path.join(tools_dir, '*.py')))
-    errors = []
+    py_files = source_files(PYTHON_ROOTS, ".py")
+    if not py_files:
+        print(red("[-] Error: No Python source files found in tools/ or shim/"))
+        return False
 
+    errors = []
     for path in py_files:
-        fname = os.path.basename(path)
+        name = os.path.relpath(path, REPO_ROOT)
         try:
             py_compile.compile(path, doraise=True)
             if verbose:
-                print(f"    [OK] {fname}")
-        except py_compile.PyCompileError as e:
-            errors.append(f"{fname}: {e}")
+                print("    [PYTHON] " + name)
+        except py_compile.PyCompileError as error:
+            errors.append("%s: %s" % (name, error))
 
     if errors:
-        print(red(f"[-] Python syntax validation failed with {len(errors)} error(s):"))
-        for err in errors:
-            print(f"    - {err}")
+        print(red("[-] Python syntax validation failed with %d error(s):" % len(errors)))
+        for error in errors:
+            print("    - " + error)
         return False
 
-    print(green(f"[✓] Validated {len(py_files)} Python tools (syntax OK)"))
+    print(green("[+] Validated %d Python source files" % len(py_files)))
     return True
 
 
 def validate_shell_scripts(verbose=False):
-    sh_files = sorted(
-        glob.glob(os.path.join(REPO_ROOT, 'tools/*.sh')) +
-        glob.glob(os.path.join(REPO_ROOT, 'shim/*.sh')) +
-        glob.glob(os.path.join(REPO_ROOT, 'xnu/patches/*.sh'))
-    )
-    errors = []
-
-    for path in sh_files:
-        rel = os.path.relpath(path, REPO_ROOT)
-        res = subprocess.run(['bash', '-n', path], capture_output=True, text=True)
-        if res.returncode != 0:
-            errors.append(f"{rel}: {res.stderr.strip()}")
-        elif verbose:
-            print(f"    [OK] {rel}")
-
-    if errors:
-        print(red(f"[-] Shell syntax validation failed with {len(errors)} error(s):"))
-        for err in errors:
-            print(f"    - {err}")
+    sh_files = source_files(SHELL_ROOTS, ".sh")
+    sh_files += source_files(SHELL_ROOTS, ".bash")
+    sh_files = sorted(set(sh_files))
+    if not sh_files:
+        print(red("[-] Error: No shell scripts found in project source directories"))
         return False
 
-    print(green(f"[✓] Validated {len(sh_files)} Shell scripts (syntax OK)"))
+    errors = []
+    for path in sh_files:
+        relative = os.path.relpath(path, REPO_ROOT)
+        result = subprocess.run(
+            ["bash", "-n", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            errors.append("%s: %s" % (relative, result.stderr.strip()))
+        elif verbose:
+            print("    [SHELL] " + relative)
+
+    if errors:
+        print(red("[-] Shell syntax validation failed with %d error(s):" % len(errors)))
+        for error in errors:
+            print("    - " + error)
+        return False
+
+    print(green("[+] Validated %d shell scripts (bash -n)" % len(sh_files)))
     return True
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Validate repository integrity, patches, and scripts.")
-    ap.add_argument('-v', '--verbose', action='store_true', help='Show detailed per-file output')
-    a = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Validate ios-flame patch sequencing and source script syntax."
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="show each checked source file",
+    )
+    args = parser.parse_args()
 
-    print(bold("=== Running ios-sweet Repository Validation ==="))
-    ok_patches = validate_patches(a.verbose)
-    ok_python = validate_python_scripts(a.verbose)
-    ok_shell = validate_shell_scripts(a.verbose)
-
-    if ok_patches and ok_python and ok_shell:
-        print(bold(green("\nAll repository integrity checks PASSED successfully!")))
+    print(bold("=== ios-flame repository validation ==="))
+    results = (
+        validate_patches(args.verbose),
+        validate_python_scripts(args.verbose),
+        validate_shell_scripts(args.verbose),
+    )
+    if all(results):
+        print(bold(green("\nAll repository checks PASSED.")))
         return 0
-    else:
-        print(bold(red("\nRepository integrity check FAILED.")))
-        return 1
+
+    print(bold(red("\nRepository checks FAILED.")))
+    return 1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

@@ -1,5 +1,7 @@
 # ios-flame
 
+[![XNU build](https://github.com/ValidityValues/ios-flame-workflow/actions/workflows/xnu.yml/badge.svg)](https://github.com/ValidityValues/ios-flame-workflow/actions/workflows/xnu.yml) [![Repository checks](https://github.com/ValidityValues/ios-flame-workflow/actions/workflows/validate.yml/badge.svg)](https://github.com/ValidityValues/ios-flame-workflow/actions/workflows/validate.yml)
+
 **Apple's iOS 16 running on a Google Pixel 4.**
 
 A port of [ios-sweet](https://github.com/dipa-studio/ios-sweet) to the Pixel 4 (`flame`, Qualcomm SM8150 /
@@ -104,6 +106,24 @@ tools/flame-ssh                                              # root shell in iOS
 `tools/flame-run.sh` is the loop underneath. It builds the payload and boot image, runs `fastboot boot`, waits for
 the run to end back in fastboot, boots TWRP, then pulls and decodes the kernel log. NOTES.md and HANDOFF.md
 ("How to run things", "Tools") cover each step and the boot args.
+
+## Build the kernel in GitHub Actions (no Mac required locally)
+
+The **Build Pixel 4 XNU** workflow compiles the flame kernel on a GitHub-hosted macOS runner. To start a build:
+
+1. Open the repository's **Actions** tab.
+2. Select **Build Pixel 4 XNU**.
+3. Click **Run workflow**, choose **DEVELOPMENT** (recommended for testing), **RELEASE**, or **DEBUG**, then start the run. Keep **Continue compiling after errors** enabled when you want the compiler to report more than the first failure.
+4. Open the completed run and download the **xnu-kernel** artifact.
+
+The xnu-kernel artifact includes the raw kernel when linking succeeds, a SHA-256 checksum, build metadata, the build log, and available Kernel Debug Kit diagnostics. The separate **xnu-buildtree** artifact includes generated headers and intermediate files for troubleshooting. The kernel artifact is retained for 14 days; the build tree is retained for 7 days. If compilation fails, logs and metadata are still uploaded when available.
+
+The build deliberately fixes the source generation to **macOS 13.5 / XNU 8796** and the machine configuration to **SWEET**, matching this port and its patch series. It uses a pinned blacktop/darwin-xnu-build commit and a compatible Xcode 16 toolchain. You do not need a Mac on your own computer; GitHub runs the compile.
+
+**Important:** the output kernel is a raw Mach-O kernel, **not** a complete iOS image and **not** a fastboot-ready boot.img. The workflow does not flash or connect to a phone. Creating a boot image and testing it still requires device-specific inputs listed above, including the stock DTB and AOSP boot-image/AVB tools. Proprietary Apple, Google and Qualcomm files and personal partition backups must remain outside Git and workflow artifacts.
+
+The lightweight **Repository checks** workflow checks patch numbering and Python/shell syntax on pushes and pull requests without requiring macOS.
+
 
 ## Credits
 

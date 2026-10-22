@@ -20,14 +20,10 @@ kernel 0124 (checked 2026-10-22).
 3. A new patch: commit the change in `work/dxb/xnu` (a git repo whose HEAD is baseline + applied patches), then
    `git diff HEAD~1 > xnu/patches/NNNN-flame-NAME.patch`.
 
-## CI (ios-sweet)
+## GitHub Actions build
 
-Built on GitHub's macOS arm64 runners by `.github/workflows/xnu.yml`, using blacktop/darwin-xnu-build at a pinned
-commit.
+The repository's **Build Pixel 4 XNU** workflow builds the flame patch series on a macOS runner using the pinned blacktop/darwin-xnu-build commit. It targets the XNU 8796 generation (MACOS_VERSION 13.5) with MACHINE_CONFIG SWEET.
 
-- `MACOS_VERSION=13.5` -> xnu-8796 (same generation as iOS 16.6/16.7, the last iOS for iPhone 8).
-- `patches/*.patch` are copied into the build script's patch dir and applied to the xnu tree with `git apply`.
-- Output: `kernel.<config>.vmapple` (later: our own SWEET machine config) as a workflow artifact.
+Start a build from **Actions → Build Pixel 4 XNU → Run workflow**. Choose DEVELOPMENT, RELEASE, or DEBUG; DEVELOPMENT is the default. The xnu-kernel artifact contains the raw kernel when compilation succeeds, its checksum, build metadata, logs, and available diagnostics. The xnu-buildtree artifact contains generated headers and intermediate files for investigating compile errors.
 
-Fetch the latest ios-sweet build: `gh run download -R dipa-studio/ios-sweet -n xnu-kernel -D xnu/out`. The
-flame patches are built locally; the workflow has not been run with them.
+This workflow produces the raw kernel only. It does not produce a complete boot.img or iOS root image: those steps require the user-supplied stock DTB, AOSP mkbootimg/avbtool, Apple iOS userland files, and other device-specific inputs described in the root README. CI does not flash a phone.
