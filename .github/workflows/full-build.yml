@@ -111,7 +111,7 @@ jobs:
           KERNEL_CONFIG: ${{ inputs.kernel_config }}
         run: |
           set -o pipefail
-          tools/ci-full-build.sh ci-input/kernel ci-input/buildtree full-build-output 2>&1 | tee full-build.log
+          bash tools/ci-full-build.sh ci-input/kernel ci-input/buildtree full-build-output 2>&1 | tee full-build.log
 
       - name: Upload full build kit
         if: success()
