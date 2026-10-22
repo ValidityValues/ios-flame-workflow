@@ -1,6 +1,11 @@
 name: Full Build - Pixel 4
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/full-build.yml"
+      - "tools/ci-full-build.sh"
   workflow_dispatch:
     inputs:
       kernel_config:
