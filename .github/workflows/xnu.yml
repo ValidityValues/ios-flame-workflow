@@ -1,6 +1,19 @@
 name: Build Pixel 4 XNU
 
 on:
+  workflow_call:
+    inputs:
+      kernel_config:
+        description: Kernel build type
+        type: string
+        required: false
+        default: DEVELOPMENT
+      keep_going:
+        description: Continue compiling after errors to collect more diagnostics
+        type: boolean
+        required: false
+        default: true
+
   workflow_dispatch:
     inputs:
       kernel_config:
@@ -29,7 +42,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: flame-xnu-${{ github.ref }}
+  group: flame-xnu-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

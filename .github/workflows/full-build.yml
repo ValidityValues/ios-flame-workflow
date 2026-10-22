@@ -1,0 +1,136 @@
+name: Full Build - Pixel 4
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_config:
+        description: XNU kernel configuration
+        type: choice
+        required: true
+        default: DEVELOPMENT
+        options:
+          - DEVELOPMENT
+          - RELEASE
+          - DEBUG
+      keep_going:
+        description: Collect more compiler errors in one run
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flame-full-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel:
+    name: Build XNU kernel
+    uses: ./.github/workflows/xnu.yml
+    with:
+      kernel_config: ${{ inputs.kernel_config }}
+      keep_going: ${{ inputs.keep_going }}
+
+  package:
+    name: Build project components and boot image
+    needs: kernel
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select compatible Xcode 16 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          XC=""
+          for candidate in \
+            /Applications/Xcode_16.4.app \
+            /Applications/Xcode_16.3.app \
+            /Applications/Xcode_16.2.app \
+            /Applications/Xcode_16.1.app \
+            /Applications/Xcode_16.0.app; do
+            if [[ -d "$candidate" ]]; then XC="$candidate"; break; fi
+          done
+          if [[ -z "$XC" ]]; then
+            echo "::error::No compatible Xcode 16.x installation was found."
+            ls -ld /Applications/Xcode*.app 2>/dev/null || true
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --find iig
+
+      - name: Download the XNU kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: ci-input/kernel
+
+      - name: Download the XNU build tree
+        uses: actions/download-artifact@v4
+        with:
+          name: xnu-buildtree
+          path: ci-input/buildtree
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install llvm lld lz4 glslang bison flex cmake ninja pkg-config
+          brew tap blacktop/tap
+          if brew trust --help >/dev/null 2>&1; then
+            brew trust blacktop/tap
+          fi
+          brew install blacktop/tap/ipsw
+          echo "$(brew --prefix)/opt/llvm/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix)/opt/bison/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix)/opt/flex/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned Rust toolchain for the Metal bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios
+          cargo +1.98.0 --version
+
+      - name: Build complete project kit
+        shell: bash
+        env:
+          KERNEL_CONFIG: ${{ inputs.kernel_config }}
+        run: |
+          set -o pipefail
+          tools/ci-full-build.sh ci-input/kernel ci-input/buildtree full-build-output 2>&1 | tee full-build.log
+
+      - name: Upload full build kit
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-flame-full-build
+          path: full-build-output/release/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-flame-full-build-diagnostics
+          path: |
+            full-build.log
+            full-build-output/logs/
+            ci-input/kernel/build.log
+            ci-input/kernel/build-info.txt
+          if-no-files-found: warn
+          retention-days: 7

@@ -127,6 +127,14 @@ The build deliberately fixes the source generation to **macOS 13.5 / XNU 8796** 
 The lightweight **Repository checks** workflow checks patch numbering and Python/shell syntax on pushes and pull requests without requiring macOS.
 
 
+## Full Build - all compiled project components
+
+The [Full Build - Pixel 4 workflow](.github/workflows/full-build.yml) calls the XNU build, fetches pinned build dependencies, compiles the in-repository phone drivers and tools, builds the Metal 2/Turnip stack, extracts the matching stock DTB, and packages a shim boot image. Launch it from **Actions -> Full Build - Pixel 4 -> Run workflow** and download the **ios-flame-full-build** artifact.
+
+The artifact includes the raw kernel, boot/flame-boot.img, generated ADT, Wi-Fi/GPU tools, on-phone utilities, Metal and Metal 2 bundles, Turnip and FlameBridge for macOS. The artifact's SHA256SUMS file verifies the delivered files.
+
+The image is **not a complete iOS installation**: Apple's iOS root volume and proprietary Qualcomm GPU firmware are not included in public artifacts, and personal modem/calibration partitions are never uploaded. The root filesystem must be built from the iPhone X 16.7.16 IPSW and installed separately in userdata; the compiled Metal 2/Turnip components require firmware from the user's own official Pixel 4 factory image for GPU acceleration. See [FULL-BUILD.md](FULL-BUILD.md) for the workflow scope and usage.
+
 ## Credits
 
 Built on ios-sweet by dipa-studio, with Wi-Fi from ios-topaz and HackiOS, and Metal from UniXNU, metal2vulkan
