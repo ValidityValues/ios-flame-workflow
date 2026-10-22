@@ -1367,16 +1367,33 @@ pub extern "C" fn nmb_command_buffer_release(command_buffer: *mut NmbCommandBuff
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_command_buffer_uses_buffer(command_buffer: *const NmbCommandBuffer, buffer: *const NmbBuffer) -> i32 {
     guard(-1, || {
-        let used = get(command_buffer)?.0.used_resources();
-        Ok(i32::from(used.references_resource(get(buffer)?.0.as_resource())))
+        let command_buffer = &get(command_buffer)?.0;
+        let buffer = &get(buffer)?.0;
+        let used = command_buffer.used_resources();
+        let buffer_id = buffer.object_id();
+        let used_directly = used.buffers.iter().any(|resource| resource.object_id() == buffer_id);
+        // UsedResources reports the owner of placed resources' memory. A buffer inside
+        // a heap therefore appears as the heap rather than as a standalone buffer.
+        let used_heap = buffer.heap().is_some_and(|target_heap| {
+            used.heaps.iter().any(|heap| heap.object_id() == target_heap.object_id())
+        });
+        Ok(i32::from(used_directly || used_heap))
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_command_buffer_uses_texture(command_buffer: *const NmbCommandBuffer, texture: *const NmbTexture) -> i32 {
     guard(-1, || {
-        let used = get(command_buffer)?.0.used_resources();
-        Ok(i32::from(used.references_resource(get(texture)?.0.as_resource())))
+        let command_buffer = &get(command_buffer)?.0;
+        let texture = &get(texture)?.0;
+        let used = command_buffer.used_resources();
+        let texture_id = texture.object_id();
+        let used_directly = used.textures.iter().any(|resource| resource.object_id() == texture_id);
+        // Textures placed in a heap are also reported by their memory owner.
+        let used_heap = texture.heap().is_some_and(|target_heap| {
+            used.heaps.iter().any(|heap| heap.object_id() == target_heap.object_id())
+        });
+        Ok(i32::from(used_directly || used_heap))
     })
 }
 
