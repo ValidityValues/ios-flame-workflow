@@ -1,11 +1,6 @@
 name: Full Build - Pixel 4
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/full-build.yml"
-      - "tools/ci-full-build.sh"
   workflow_dispatch:
     inputs:
       kernel_config:
@@ -22,25 +17,276 @@ on:
         type: boolean
         required: true
         default: true
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/full-build.yml"
+      - "tools/ci-full-build.sh"
 
 permissions:
   contents: read
 
 concurrency:
-  group: flame-full-build-${{ github.ref }}
+  group: flame-xnu-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build
+  DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+  # The flame patches target the xnu-8796 generation.
+  MACOS_VERSION: "13.5"
+  MACHINE_CONFIG: SWEET
+  KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+
 jobs:
-  kernel:
-    name: Build XNU kernel
-    uses: ./.github/workflows/xnu.yml
-    with:
-      kernel_config: ${{ inputs.kernel_config }}
-      keep_going: ${{ inputs.keep_going }}
+  validate:
+    name: Validate patches and scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check patch sequence and source syntax
+        run: python3 tools/validate-repo.py --verbose
+
+  build:
+    name: Build ${{ inputs.kernel_config || 'DEVELOPMENT' }} kernel
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select a compatible Xcode 16 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+
+          # This patch series targets XNU 8796 and needs Xcode 16's iig ABI.
+          # Prefer a known compatible Xcode 16 version; do not guess by sorting names.
+          XC=""
+          for candidate in \
+            /Applications/Xcode_16.4.app \
+            /Applications/Xcode_16.3.app \
+            /Applications/Xcode_16.2.app \
+            /Applications/Xcode_16.1.app \
+            /Applications/Xcode_16.0.app; do
+            if [[ -d "$candidate" ]]; then
+              XC="$candidate"
+              break
+            fi
+          done
+
+          if [[ -z "$XC" ]]; then
+            echo "::error::No compatible Xcode 16.x installation was found on this runner."
+            ls -ld /Applications/Xcode*.app 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Using $XC"
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          xcrun --find iig
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install jq gum bash cmake ninja
+
+          # The pinned upstream script checks for xcodes although Xcode is already
+          # present. This stub prevents a second Xcode download on a hosted runner.
+          BREW_BIN="$(brew --prefix)/bin"
+          if ! command -v xcodes >/dev/null 2>&1; then
+            printf '#!/bin/sh\nexit 0\n' | sudo tee "$BREW_BIN/xcodes" >/dev/null
+            sudo chmod +x "$BREW_BIN/xcodes"
+          fi
+
+      - name: Prepare the pinned XNU builder and flame patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_SHA"
+          git -C dxb checkout -q FETCH_HEAD
+
+          # For MACOS_VERSION 13.5, the upstream builder applies patches from dxb/patches.
+          cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
+
+          # libfirehose_kernel defaults to arm64e only; SWEET produces plain arm64.
+          if ! grep -q 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh; then
+            sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
+          fi
+          grep -q 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh || {
+            echo "::error::Could not apply the expected arm64 libfirehose build adjustment."
+            exit 1
+          }
+
+          echo "Pinned builder commit: $(git -C dxb rev-parse HEAD)"
+          echo "Flame patches staged: $(find dxb/patches -maxdepth 1 -name '*.patch' | wc -l | tr -d ' ')"
+          ls dxb/patches
+
+      - name: Build XNU
+        working-directory: dxb
+        env:
+          MAKEFLAGS: ${{ inputs.keep_going && '-k' || '' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee ../xnu-build.log
+
+      - name: Verify kernel output
+        if: success()
+        shell: bash
+        env:
+          KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+        run: |
+          set -euo pipefail
+          CONFIG_LOWER="$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]')"
+          EXPECTED="dxb/build/xnu.obj/${KERNEL_CONFIG}_ARM64_SWEET/kernel.$CONFIG_LOWER.sweet"
+          if [[ ! -s "$EXPECTED" ]]; then
+            echo "::error::The build step succeeded but did not produce the expected kernel: $EXPECTED"
+            find dxb/build/xnu.obj -maxdepth 4 -type f -name 'kernel.*.sweet' -print 2>/dev/null || true
+            exit 1
+          fi
+          file "$EXPECTED"
+          shasum -a 256 "$EXPECTED"
+
+      - name: Inspect Kernel Debug Kit support libraries
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p out/kdk-libs
+          shopt -s nullglob
+          for lib in /Library/Developer/KDKs/*/System/Library/KernelSupport/lib*.a; do
+            b="$(basename "$lib" .a)"
+            ar t "$lib" > "out/kdk-libs/$b.members.txt" 2>&1 || true
+            nm -m "$lib" > "out/kdk-libs/$b.nm.txt" 2>&1 || true
+            lipo -info "$lib" >> out/kdk-libs/arch.txt 2>&1 || true
+          done
+          {
+            echo "KDK directories:"
+            ls -ld /Library/Developer/KDKs/* 2>/dev/null || true
+          } > out/kdk-libs/overview.txt
+
+      - name: Collect kernel, checksum, build log, and metadata
+        if: always()
+        shell: bash
+        env:
+          KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          CONFIG_LOWER="$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]')"
+          EXPECTED="dxb/build/xnu.obj/${KERNEL_CONFIG}_ARM64_SWEET/kernel.$CONFIG_LOWER.sweet"
+
+          if [[ -f "$EXPECTED" ]]; then
+            cp "$EXPECTED" out/
+          elif [[ -d dxb/build/xnu.obj ]]; then
+            find dxb/build/xnu.obj -type f -name "kernel.$CONFIG_LOWER.sweet" -exec cp {} out/ \; 2>/dev/null || true
+          fi
+
+          if [[ -d dxb/fakeroot/System/Library/Kernels ]]; then
+            mkdir -p out/installed-kernels
+            cp -R dxb/fakeroot/System/Library/Kernels/. out/installed-kernels/
+          fi
+          if [[ -f xnu-build.log ]]; then cp xnu-build.log out/build.log; fi
+
+          {
+            echo "Project: ios-flame-workflow"
+            echo "Source commit: $GITHUB_SHA"
+            echo "Build configuration: $KERNEL_CONFIG"
+            echo "Machine configuration: $MACHINE_CONFIG"
+            echo "XNU generation: $MACOS_VERSION (xnu-8796 series)"
+            echo "Builder repository: $DXB_REPO"
+            echo "Builder commit: $(git -C dxb rev-parse HEAD 2>/dev/null || echo unavailable)"
+            echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+            echo "Build time UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo
+            sw_vers 2>&1 || true
+            xcodebuild -version 2>&1 || true
+          } > out/build-info.txt
+
+          : > out/SHA256SUMS
+          found_kernel=false
+          for kernel in out/kernel.*.sweet; do
+            [[ -f "$kernel" ]] || continue
+            found_kernel=true
+          done
+          if [[ "$found_kernel" == true ]]; then
+            (cd out && shasum -a 256 kernel.*.sweet > SHA256SUMS)
+          fi
+
+          {
+            echo "## XNU build artifact"
+            echo
+            echo "- Configuration: $KERNEL_CONFIG"
+            if [[ "$found_kernel" == true ]]; then
+              echo "- Raw kernel binary and SHA-256 checksum are included."
+            else
+              echo "- No kernel binary was produced. Download this artifact for build.log and build-info.txt."
+            fi
+            echo "- The kernel is a raw Mach-O file, not a fastboot-ready boot.img."
+          } >> "$GITHUB_STEP_SUMMARY"
+          find out -maxdepth 2 -type f -print | sort
+
+      - name: Package generated build files for debugging
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f buildtree.tgz buildtree-not-available.txt
+          mkdir -p sdk-kernel-platform
+
+          SDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+          if [[ -n "$SDK" && -d "$SDK/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform" ]]; then
+            cp -R "$SDK/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform" sdk-kernel-platform/
+          fi
+
+          if [[ -d dxb ]]; then
+            paths=()
+            for path in build/xnu.obj fakeroot/usr/local/include xnu; do
+              [[ -e "dxb/$path" ]] && paths+=("$path")
+            done
+            if [[ ${#paths[@]} -gt 0 ]]; then
+              if tar czf buildtree.tgz \
+                --exclude='*.o' --exclude='*.cpo' --exclude='*.a' --exclude='*.dSYM' \
+                --exclude='*.unstripped' --exclude='kernel.*.sweet' --exclude='.git' \
+                -C "$GITHUB_WORKSPACE/dxb" "${paths[@]}" \
+                -C "$GITHUB_WORKSPACE" sdk-kernel-platform; then
+                ls -lh buildtree.tgz
+              else
+                rm -f buildtree.tgz
+                echo "Build-tree archive creation failed. See the job log." > buildtree-not-available.txt
+              fi
+            else
+              echo "The upstream builder did not create source/build directories." > buildtree-not-available.txt
+            fi
+          else
+            echo "The upstream builder checkout was not created." > buildtree-not-available.txt
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xnu-kernel
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xnu-buildtree
+          path: |
+            buildtree.tgz
+            buildtree-not-available.txt
+          if-no-files-found: warn
+          retention-days: 7
 
   package:
     name: Build project components and boot image
-    needs: kernel
+    needs: build
     runs-on: macos-15
     timeout-minutes: 240
     steps:
@@ -112,8 +358,6 @@ jobs:
 
       - name: Build complete project kit
         shell: bash
-        env:
-          KERNEL_CONFIG: ${{ inputs.kernel_config }}
         run: |
           set -o pipefail
           bash tools/ci-full-build.sh ci-input/kernel ci-input/buildtree full-build-output 2>&1 | tee full-build.log
