@@ -118,6 +118,8 @@ The **Build Pixel 4 XNU** workflow compiles the flame kernel on a GitHub-hosted 
 
 The xnu-kernel artifact includes the raw kernel when linking succeeds, a SHA-256 checksum, build metadata, the build log, and available Kernel Debug Kit diagnostics. The separate **xnu-buildtree** artifact includes generated headers and intermediate files for troubleshooting. The kernel artifact is retained for 14 days; the build tree is retained for 7 days. If compilation fails, logs and metadata are still uploaded when available.
 
+After extracting the xnu-kernel artifact, verify the kernel from the directory containing SHA256SUMS with: shasum -a 256 -c SHA256SUMS.
+
 The build deliberately fixes the source generation to **macOS 13.5 / XNU 8796** and the machine configuration to **SWEET**, matching this port and its patch series. It uses a pinned blacktop/darwin-xnu-build commit and a compatible Xcode 16 toolchain. You do not need a Mac on your own computer; GitHub runs the compile.
 
 **Important:** the output kernel is a raw Mach-O kernel, **not** a complete iOS image and **not** a fastboot-ready boot.img. The workflow does not flash or connect to a phone. Creating a boot image and testing it still requires device-specific inputs listed above, including the stock DTB and AOSP boot-image/AVB tools. Proprietary Apple, Google and Qualcomm files and personal partition backups must remain outside Git and workflow artifacts.

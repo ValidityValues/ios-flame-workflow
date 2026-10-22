@@ -137,6 +137,23 @@ jobs:
           set -o pipefail
           bash build.sh 2>&1 | tee ../xnu-build.log
 
+      - name: Verify kernel output
+        if: success()
+        shell: bash
+        env:
+          KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+        run: |
+          set -euo pipefail
+          CONFIG_LOWER="$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]')"
+          EXPECTED="dxb/build/xnu.obj/${KERNEL_CONFIG}_ARM64_SWEET/kernel.$CONFIG_LOWER.sweet"
+          if [[ ! -s "$EXPECTED" ]]; then
+            echo "::error::The build step succeeded but did not produce the expected kernel: $EXPECTED"
+            find dxb/build/xnu.obj -maxdepth 4 -type f -name 'kernel.*.sweet' -print 2>/dev/null || true
+            exit 1
+          fi
+          file "$EXPECTED"
+          shasum -a 256 "$EXPECTED"
+
       - name: Inspect Kernel Debug Kit support libraries
         if: always()
         shell: bash
@@ -196,9 +213,11 @@ jobs:
           found_kernel=false
           for kernel in out/kernel.*.sweet; do
             [[ -f "$kernel" ]] || continue
-            shasum -a 256 "$kernel" >> out/SHA256SUMS
             found_kernel=true
           done
+          if [[ "$found_kernel" == true ]]; then
+            (cd out && shasum -a 256 kernel.*.sweet > SHA256SUMS)
+          fi
 
           {
             echo "## XNU build artifact"
@@ -234,7 +253,7 @@ jobs:
             if [[ ${#paths[@]} -gt 0 ]]; then
               if tar czf buildtree.tgz \
                 --exclude='*.o' --exclude='*.cpo' --exclude='*.a' --exclude='*.dSYM' \
-                --exclude='*.unstripped' --exclude='kernel.development.*' --exclude='.git' \
+                --exclude='*.unstripped' --exclude='kernel.*.sweet' --exclude='.git' \
                 -C "$GITHUB_WORKSPACE/dxb" "${paths[@]}" \
                 -C "$GITHUB_WORKSPACE" sdk-kernel-platform; then
                 ls -lh buildtree.tgz
