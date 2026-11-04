@@ -60,19 +60,12 @@ env:
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
 
 jobs:
-  validate:
-    name: Validate patches and scripts
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check patch sequence and source syntax
-        run: python3 tools/validate-repo.py --verbose
-
   build:
-    name: Build ${{ inputs.kernel_config || 'DEVELOPMENT' }} kernel
-    needs: validate
+    # One job on one macOS runner: kernel and kit used to be separate jobs, and each one
+    # waited in the macOS runner queue again (and moved the kernel through artifacts).
+    name: Build ${{ inputs.kernel_config || 'DEVELOPMENT' }} kernel and boot image
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -122,6 +115,9 @@ jobs:
             printf '#!/bin/sh\nexit 0\n' | sudo tee "$BREW_BIN/xcodes" >/dev/null
             sudo chmod +x "$BREW_BIN/xcodes"
           fi
+
+      - name: Check patch sequence and source syntax (Homebrew bash, like the build)
+        run: python3 tools/validate-repo.py --verbose
 
       - name: Prepare the pinned XNU builder and flame patches
         shell: bash
@@ -305,52 +301,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  package:
-    name: Build project components and boot image
-    needs: build
-    runs-on: macos-15
-    timeout-minutes: 240
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Select compatible Xcode 16 toolchain
+      - name: Stage the kernel for the project build
         shell: bash
         run: |
           set -euo pipefail
-          sw_vers
-          XC=""
-          for candidate in \
-            /Applications/Xcode_16.4.app \
-            /Applications/Xcode_16.3.app \
-            /Applications/Xcode_16.2.app \
-            /Applications/Xcode_16.1.app \
-            /Applications/Xcode_16.0.app; do
-            if [[ -d "$candidate" ]]; then XC="$candidate"; break; fi
+          mkdir -p ci-input/kernel ci-input/buildtree
+          cp -R out/. ci-input/kernel/
+          for f in buildtree.tgz buildtree-not-available.txt; do
+            [[ ! -e "$f" ]] || cp "$f" ci-input/buildtree/
           done
-          if [[ -z "$XC" ]]; then
-            echo "::error::No compatible Xcode 16.x installation was found."
-            ls -ld /Applications/Xcode*.app 2>/dev/null || true
-            exit 1
-          fi
-          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
-          sudo xcode-select -s "$XC/Contents/Developer"
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-path
-          xcrun --find iig
+          ls -la ci-input/kernel ci-input/buildtree
 
-      - name: Download the XNU kernel artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: xnu-kernel
-          path: ci-input/kernel
-
-      - name: Download the XNU build tree
-        uses: actions/download-artifact@v4
-        with:
-          name: xnu-buildtree
-          path: ci-input/buildtree
-
-      - name: Install build dependencies
+      - name: Install project build dependencies
         shell: bash
         run: |
           set -euo pipefail
