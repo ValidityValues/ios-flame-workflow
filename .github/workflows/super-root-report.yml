@@ -1,0 +1,44 @@
+name: Super root size report
+
+# Checks that the slimmed iOS root (tools/super-root/slim.rules) fits Pixel 4's super
+# partition. Lists Apple's IPSW images with 7-Zip and prints a size report; nothing
+# is mounted, extracted or uploaded (the image itself is built locally with
+# tools/build-super-root.sh and never published).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, boot-super]
+    paths:
+      - ".github/workflows/super-root-report.yml"
+      - "tools/super-root/slim.rules"
+      - "tools/super-root/measure.py"
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 7-Zip 25.01 (reads APFS and its compressed files)
+        run: |
+          curl -fsSL https://www.7-zip.org/a/7z2501-linux-x64.tar.xz -o 7z.tar.xz
+          echo "4ca3b7c6f2f67866b92622818b58233dc70367be2f36b498eb0bdeaaa44b53f4  7z.tar.xz" | sha256sum -c -
+          mkdir 7z && tar -xJf 7z.tar.xz -C 7z
+      - name: List the OS, SystemOS and AppOS images (one at a time, deleted after listing)
+        run: |
+          set -euo pipefail
+          IPSW="https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/1158E502-D76D-4226-AA06-ED5E30CD1111/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw"
+          python3 tools/remotezip.py "$IPSW" BuildManifest.plist ipsw > /dev/null
+          for key in OS Cryptex1,SystemOS Cryptex1,AppOS; do
+            m=$(python3 -c "import plistlib,sys; print(plistlib.load(open('ipsw/BuildManifest.plist','rb'))['BuildIdentities'][0]['Manifest'][sys.argv[1]]['Info']['Path'])" "$key")
+            python3 tools/remotezip.py "$IPSW" "$m" ipsw | tail -1
+            7z/7zz l "ipsw/$m" > "list-${key#*,}.txt" || true
+            tail -1 "list-${key#*,}.txt"
+            rm -f "ipsw/$m"
+          done
+      - name: Size report
+        run: |
+          python3 tools/super-root/measure.py tools/super-root/slim.rules list-OS.txt list-SystemOS.txt list-AppOS.txt | tee -a "$GITHUB_STEP_SUMMARY"

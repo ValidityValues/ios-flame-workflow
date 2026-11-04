@@ -16,6 +16,12 @@
 # cryptex shared cache (ignition_level=1 looks there), and
 # /private/var/keybags/systembag.kb is the plain-plist system keybag that
 # keybagd reads with /defaults/no-effaceable-storage (tools/mkadt.py).
+#
+# Optional (tools/build-super-root.sh uses both):
+#   MKIOSROOT_FILTER=RULES  rsync filter file applied to all three copies
+#                           (tools/super-root/slim.rules: what to leave out for super)
+#   MKIOSROOT_HOOK=PROG     run as `PROG MOUNTED_ROOT` (by this user; PROG uses sudo) after
+#                           the copy, before the volume is unmounted and checked
 set -euo pipefail
 
 [[ $# -ge 4 ]] || { sed -n '2,12p' "$0"; exit 2; }
@@ -83,8 +89,9 @@ mounts=("$work/root" "${mounts[@]}")
 copy() {
 	echo "copying $1 -> ${2#"$work/root"}"
 	sudo mkdir -p "$2"
-	sudo rsync -aH --numeric-ids "$1/" "$2/"
+	sudo rsync -aH --numeric-ids ${filter:+"--filter=merge $filter"} "$1/" "$2/"
 }
+filter=${MKIOSROOT_FILTER:+$(realpath "$MKIOSROOT_FILTER")}
 copy "$work/os/root" "$work/root"
 copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
 copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
@@ -129,6 +136,8 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
 	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
+
+[[ -z ${MKIOSROOT_HOOK:-} ]] || "$MKIOSROOT_HOOK" "$work/root"
 
 df -h "$work/root"
 sudo umount "$work/root"

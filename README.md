@@ -79,6 +79,18 @@ Google's/Qualcomm's files, or data from your own phone.
   Apple's CDN. Build the HFS+ image with `tools/mkiosroot.sh` in a Linux VM (apfs-fuse, hfsprogs), then run
   `tools/sweet-root-tweaks.py`. Write it from TWRP with `adb exec-in 'dd of=/dev/block/sda15 bs=4194304' < IMG`,
   not `fastboot flash userdata` (ABL hangs on the last chunk).
+- **The iOS root in `super`** (default since the boot image mounts `ufsroot=super`): `bash tools/build-super-root.sh`
+  does all of the above in one go on Linux and adds a jailbreak userland. It fetches and verifies the IPSW
+  images, leaves out what does not fit the 9.1 GiB partition (`tools/super-root/slim.rules`: Apple Watch, Siri
+  and voice assets, OTA ramdisk, removable apps, ML models, shared-cache symbols, languages other than en/ru;
+  ~11.4 -> ~7.2 GiB, ~1.4 GiB stays free), applies the tweaks, installs the Procursus rootless bootstrap in
+  `/var/jb` (OpenSSH on 22/2222) and stages TrollStore Lite, which a first-boot job installs with dpkg and
+  registers with `uicache`. With `--kit` (the unpacked full-build artifact) it also installs wland and its
+  boot job, the GPU/debug tools and SweetMetal(2); the modem and vendor Wi-Fi firmware come from Google's
+  factory image, your rmtfs images from `bash tools/super-root/pull-rmtfs.sh`. Write it with
+  `bash tools/super-root/flash-super.sh IMG` (backs super up first, checks LUN 0 and the 8 MiB log area, verifies
+  per GiB). The "Super root size report" workflow re-checks the fit; the image itself is never built in CI or
+  published, because it contains Apple's iOS.
 - **Firmware** from the factory image's `vendor.img` (`/firmware`):
   - GPU: `a640_gmu.bin`, `a640_zap.mdt`/`.b02` and `a630_sqe.fw` in `research/gpu/fw/` (`flame-run.sh -G`
     puts them in the device tree).

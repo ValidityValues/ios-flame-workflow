@@ -1,0 +1,87 @@
+# rsync filter rules applied by tools/mkiosroot.sh (MKIOSROOT_FILTER) when the iOS root
+# is built for Pixel 4's 9.1 GiB super partition: the full 16.7.16 root is ~11.4 GiB
+# uncompressed (APFS stores it LZBITMAP-compressed, Linux hfsplus cannot). Only data
+# this port does not use goes: watch, Siri/voice, OTA, symbolication, extra languages.
+# Directories are emptied ('/*'), not removed, so code that enumerates them still finds them.
+# rsync filter syntax: comments only on their own lines, first matching rule wins.
+# Sizes: 4 KiB-rounded, measured from the 20H392 images (tools/super-root/measure.py).
+
+# OS root
+# 162 MiB OTA update ramdisk
+- /usr/standalone/update/*
+# 496 MiB removable apps (Maps, Books, Watch, Music...)
+- /private/var/staged_system_apps/*
+# 173 MiB Apple Watch faces
+- /System/Library/NanoTimeKit/*
+# 23 MiB Apple Watch settings
+- /System/Library/NanoPreferenceBundles/*
+# 347 MiB Siri flows
+- /System/Library/Assistant/FlowDelegatePlugins/*
+# 107 MiB Health feed media
+- /System/Library/Health/Assets/*
+# 153 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_SharingDeviceAssets/*
+# 152 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_VoiceServices_VoiceResources/*
+# 132 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_VoiceServices_CustomVoice/*
+# 99 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_ContextKit/*
+# 53 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_VoiceTriggerAssets/*
+# 32 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_VoiceTriggerHSAssets/*
+# 5 MiB
+- /System/Library/PreinstalledAssetsV2/RequiredByOs/com_apple_MobileAsset_SpeakerRecognitionAssets/*
+# keyboard/NLP data: English and Russian only (~840 MiB of other languages)
++ /System/Library/LinguisticData/RequiredAssets_en.bundle/
++ /System/Library/LinguisticData/RequiredAssets_ru.bundle/
+- /System/Library/LinguisticData/RequiredAssets_*.bundle/
+
+# Framework resources only (code lives in the shared cache): keep each bundle's
+# Info.plist, signature and strings so NSBundle lookups still work, drop the models/media.
+# 286 MiB Vision ML models (Photos/Camera analysis, Live Text)
++ /System/Library/Frameworks/Vision.framework/Info.plist
++ /System/Library/Frameworks/Vision.framework/_CodeSignature/
++ /System/Library/Frameworks/Vision.framework/*.lproj/
+- /System/Library/Frameworks/Vision.framework/*
+# 245 MiB photo/video analysis models (mediaanalysisd)
++ /System/Library/PrivateFrameworks/MediaAnalysis.framework/Info.plist
++ /System/Library/PrivateFrameworks/MediaAnalysis.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/MediaAnalysis.framework/*.lproj/
+- /System/Library/PrivateFrameworks/MediaAnalysis.framework/*
+# 110 MiB text-to-speech voices
++ /System/Library/PrivateFrameworks/TextToSpeechMauiSupport.framework/Info.plist
++ /System/Library/PrivateFrameworks/TextToSpeechMauiSupport.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/TextToSpeechMauiSupport.framework/*.lproj/
+- /System/Library/PrivateFrameworks/TextToSpeechMauiSupport.framework/*
+#  76 MiB Live Text language models
++ /System/Library/PrivateFrameworks/CVNLP.framework/Info.plist
++ /System/Library/PrivateFrameworks/CVNLP.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/CVNLP.framework/*.lproj/
+- /System/Library/PrivateFrameworks/CVNLP.framework/*
+#  75 MiB Live Text OCR models
++ /System/Library/PrivateFrameworks/TextRecognition.framework/Info.plist
++ /System/Library/PrivateFrameworks/TextRecognition.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/TextRecognition.framework/*.lproj/
+- /System/Library/PrivateFrameworks/TextRecognition.framework/*
+#  70 MiB Memoji/Animoji
++ /System/Library/PrivateFrameworks/AvatarKit.framework/Info.plist
++ /System/Library/PrivateFrameworks/AvatarKit.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/AvatarKit.framework/*.lproj/
+- /System/Library/PrivateFrameworks/AvatarKit.framework/*
+#  60 MiB Apple Watch faces
++ /System/Library/PrivateFrameworks/NanoUniverse.framework/Info.plist
++ /System/Library/PrivateFrameworks/NanoUniverse.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/NanoUniverse.framework/*.lproj/
+- /System/Library/PrivateFrameworks/NanoUniverse.framework/*
+#  63 MiB Clips/FaceTime effects
++ /System/Library/PrivateFrameworks/CameraEffectsKit.framework/Info.plist
++ /System/Library/PrivateFrameworks/CameraEffectsKit.framework/_CodeSignature/
++ /System/Library/PrivateFrameworks/CameraEffectsKit.framework/*.lproj/
+- /System/Library/PrivateFrameworks/CameraEffectsKit.framework/*
+
+# SystemOS cryptex: shared cache symbol tables (crash symbolication only)
+# 564 MiB
+- /System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64.symbols
+- /System/DriverKit/System/Library/dyld/dyld_shared_cache_arm64.symbols

@@ -8,14 +8,22 @@ Members are streamed to disk in chunks (multi-GB DMGs never sit in RAM), a
 partial download resumes from where it stopped, and the zip CRC-32 is
 checked before the file gets its final name.
 """
-import os, struct, subprocess, sys, zlib
+import os, struct, subprocess, sys, time, zlib
 
 
 # curl rather than urllib: urllib hangs on this host's broken IPv6 route to
 # Apple's CDN, curl falls back to IPv4.
-def curl(*args):
-    return subprocess.run(['curl', '-sfL', '--max-time', '300', *args],
-                          check=True, capture_output=True).stdout
+def curl(*args, tries=8):
+    # CDN connections drop now and then (curl 35/56); retry with backoff.
+    for i in range(tries):
+        r = subprocess.run(['curl', '-sfL', '--max-time', '300', *args],
+                           capture_output=True)
+        if r.returncode == 0:
+            return r.stdout
+        print(f'curl exit {r.returncode}, retry {i + 1}/{tries}',
+              file=sys.stderr, flush=True)
+        time.sleep(min(2 ** i, 30))
+    raise subprocess.CalledProcessError(r.returncode, ['curl', *args])
 
 
 def get(url, start, end):
