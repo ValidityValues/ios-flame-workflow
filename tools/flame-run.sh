@@ -13,8 +13,10 @@
 #   5. pull + decode the XNU ring, the shim log and the rescue into logs/runs/NAME/
 #      and print a summary (panics, errors, last lines, lines matching REGEX)
 #
-# The phone is left in TWRP.
+# The phone is left in TWRP. The iOS root partition is FLAME_ROOT_PART (GPT name, default super;
+# FLAME_ROOT_PART=userdata for the old layout): XNU mounts it and the shim logs to its end.
 set -euo pipefail
+part=${FLAME_ROOT_PART:-super}
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 name=$1; shift
@@ -28,7 +30,7 @@ while getopts "k:s:a:f:g:p:G" o; do
 	*) exit 2 ;;
 	esac
 done
-base="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsrw=1 rootrw=1"
+base="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsroot=$part ufsrw=1 rootrw=1"
 base="$base unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1"
 base="$base wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2"
 cmdline="$base flamereboot=$secs $extra"
@@ -43,12 +45,12 @@ pokearg=()
 if [ -n "$poke" ]; then cp "$poke" "$out/poke.txt"; pokearg=(--poke "$poke"); fi
 if [ "$gpu" = 1 ]; then pokearg+=(--gpufw research/gpu/fw); cmdline="$cmdline sweetgpu=1"; echo "$cmdline" > "$out/cmdline"; fi
 python3 tools/mkpayload.py "$kernel" work/boot/flame-hi.adt "$out/payload.bin" --cmdline "$cmdline" ${pokearg[@]+"${pokearg[@]}"} >/dev/null
-shim/build.sh "$out/payload.bin" "$img" >/dev/null 2>&1
+SHIM_CFLAGS="-DSHIM_UFS_PART=$part" shim/build.sh "$out/payload.bin" "$img" >/dev/null 2>&1
 rm -f "$out/payload.bin"
 # The probe shim (no payload) for the rescue boot: build it once per shim change.
-probe=$ROOT/work/boot/shim-probe.img
+probe=$ROOT/work/boot/shim-probe-$part.img
 if [ ! -f "$probe" ] || [ -n "$(find shim -newer "$probe" -name '*.[chS]' | head -1)" ]; then
-	shim/build.sh "" "$probe" >/dev/null 2>&1
+	SHIM_CFLAGS="-DSHIM_UFS_PART=$part" shim/build.sh "" "$probe" >/dev/null 2>&1
 fi
 
 to_fastboot() {

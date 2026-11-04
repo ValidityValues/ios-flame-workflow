@@ -17,8 +17,16 @@ on:
         type: boolean
         required: true
         default: true
+      root_partition:
+        description: GPT partition holding the iOS HFS+ root (the boot image mounts it)
+        type: choice
+        required: true
+        default: super
+        options:
+          - super
+          - userdata
   push:
-    branches: [main]
+    branches: [main, boot-super]
     paths:
       - ".github/workflows/full-build.yml"
       - "tools/ci-full-build.sh"
@@ -366,6 +374,8 @@ jobs:
 
       - name: Build complete project kit
         shell: bash
+        env:
+          ROOT_PARTITION: ${{ inputs.root_partition || 'super' }}
         run: |
           set -o pipefail
           bash tools/ci-full-build.sh ci-input/kernel ci-input/buildtree full-build-output 2>&1 | tee full-build.log

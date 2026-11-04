@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 /*
- * Scratch area at the end of userdata, in 4K blocks. The last 1025 blocks
+ * Scratch area at the end of the iOS root partition (SHIM_UFS_PART), in 4K blocks. The last 1025 blocks
  * belong to the XNU persistent console log (ring + header); the shim's log
  * goes in the 64 blocks before them, and the RAM log rescue (ramlog.c) in
  * the 64 blocks before that.

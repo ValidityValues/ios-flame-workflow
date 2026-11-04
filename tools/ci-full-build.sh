@@ -125,10 +125,15 @@ python3 tools/unpack_bootv2.py "$ROOT/stock/boot.img" "$ROOT/stock/unpacked" > "
 [[ -s "$ROOT/stock/unpacked/dtb" ]] || fail "Stock Android boot.img did not contain a DTB"
 cp "$ROOT/stock/unpacked/dtb" "$ROOT/stock/dtb"
 
-# The shim loads XNU from the payload; the iOS HFS+ root must already be in userdata.
-CMDLINE="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsrw=1 rootrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 flamereboot=300 sweetusb=2 sweetusbframes=0 sweetmtl=2"
+# The shim loads XNU from the payload; the iOS HFS+ root must already be in ROOT_PARTITION
+# (GPT name on UFS LUN 0, default super). XNU mounts it (ufsroot=), and the shim and XNU keep
+# their logs in the last ~4.6 MiB of the same partition, so Android's userdata is never written.
+ROOT_PARTITION="${ROOT_PARTITION:-super}"
+[[ "$ROOT_PARTITION" =~ ^[A-Za-z0-9_]{1,35}$ ]] || fail "Invalid ROOT_PARTITION: $ROOT_PARTITION"
+CMDLINE="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsroot=$ROOT_PARTITION ufsrw=1 rootrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 flamereboot=300 sweetusb=2 sweetusbframes=0 sweetmtl=2"
 python3 tools/mkpayload.py "$KERNEL" "$ROOT/work/boot/flame-hi.adt" "$TMP/payload.bin" --cmdline "$CMDLINE" > "$OUT/logs/mkpayload.txt"
-shim/build.sh "$TMP/payload.bin" "$OUT/release/boot/flame-boot.img" > "$OUT/logs/shim-build.txt" 2>&1
+SHIM_CFLAGS="-DSHIM_UFS_PART=$ROOT_PARTITION" shim/build.sh "$TMP/payload.bin" "$OUT/release/boot/flame-boot.img" > "$OUT/logs/shim-build.txt" 2>&1
+echo "$CMDLINE" > "$OUT/release/boot/cmdline.txt"
 
 # Copy compiled phone components to a predictable layout.
 cp "$ROOT/work/boot/flame-hi.adt" "$OUT/release/boot/"
@@ -150,7 +155,7 @@ This kit was built by GitHub Actions for Google Pixel 4 (flame), with XNU 8796 a
 
 ## Contents
 
-- boot/flame-boot.img: shim plus XNU payload, packed with the matching stock Pixel 4 DTB and AVB hash footer.
+- boot/flame-boot.img: shim plus XNU payload, packed with the matching stock Pixel 4 DTB and AVB hash footer. It mounts the iOS root from the GPT partition named in boot/cmdline.txt (ufsroot=, super by default) and writes its logs only to the end of that partition.
 - kernel/: the raw Mach-O XNU kernel used in the boot image.
 - boot/flame-hi.adt: generated Apple device tree for this port.
 - phone/: compiled Wi-Fi, GPU/memory tools, debug utilities, legacy Metal, Metal 2 and Turnip components.
@@ -158,16 +163,16 @@ This kit was built by GitHub Actions for Google Pixel 4 (flame), with XNU 8796 a
 
 ## Important before booting
 
-This artifact is not a complete iOS installation. It intentionally does not include Apple's multi-gigabyte iOS root volume, Google's full factory archive, Qualcomm firmware dumps, or private modem/calibration backups. The iOS HFS+ root must already be prepared from the iPhone X iOS 16.7.16 (20H392) IPSW and installed in Pixel 4 userdata using the procedure in the repository README. Without that root volume, XNU cannot reach SpringBoard.
+This artifact is not a complete iOS installation. It intentionally does not include Apple's multi-gigabyte iOS root volume, Google's full factory archive, Qualcomm firmware dumps, or private modem/calibration backups. The iOS HFS+ root must already be prepared from the iPhone X iOS 16.7.16 (20H392) IPSW and written to the Pixel 4 partition the boot image uses (super by default; see boot/cmdline.txt). Back up super first (for example from TWRP: adb exec-out 'dd if=/dev/block/by-name/super bs=4194304' > super-backup.img) so Android can be restored by writing it back. The HFS+ image must be at least 8 MiB smaller than the partition: the last ~4.6 MiB hold the boot logs. Without that root volume, XNU cannot reach SpringBoard.
 
 The boot image also does not embed Qualcomm GPU firmware. Metal 2 and Turnip were compiled and are included, but hardware-accelerated graphics requires the matching firmware extracted locally from your official Pixel 4 factory image, then added to the ADT/payload following the repository's tools/mkpayload.py instructions.
 
 ## Boot
 
 1. Confirm this is a Pixel 4 (flame) with an unlocked bootloader and keep a stock recovery path available.
-2. Back up personal data and per-device partitions before changing userdata.
+2. Back up the super partition and the per-device partitions (persist, modemst1/2, fsg, fsc) before writing the iOS root.
 3. Put the phone in fastboot and verify it appears with fastboot devices.
-4. If the iOS root is already installed in userdata, boot the image temporarily:
+4. If the iOS root is already installed in the root partition, boot the image temporarily:
 
    ~~~sh
    fastboot boot boot/flame-boot.img
@@ -190,6 +195,7 @@ cat > "$OUT/release/build-info.txt" <<EOF
 Project: ios-flame-workflow
 Repository commit: ${GITHUB_SHA:-local}
 Kernel: $KERNEL_NAME
+iOS root partition: $ROOT_PARTITION
 Kernel SHA-256: $(shasum -a 256 "$OUT/release/kernel/$KERNEL_NAME" | awk '{print $1}')
 XNU generation: macOS 13.5 / xnu-8796.141.3
 Mesa commit: $MESA_SHA

@@ -2,7 +2,7 @@
 # Build the SWEET iOS root: one case-sensitive HFS+ image holding an iOS OS
 # root filesystem plus its cryptexes, for the userdata partition (rd=ufsroot0).
 #
-#   mkiosroot.sh OS.dmg SYSTEMOS.dmg APPOS.dmg OUT.img [SIZE]     (SIZE default 16G)
+#   mkiosroot.sh OS.dmg SYSTEMOS.dmg APPOS.dmg OUT.img [SIZE]     (SIZE default 16G; super = 9296M)
 #
 # The IPSW images are raw APFS with LZBITMAP-compressed files: they are read
 # through apfs-fuse (decompressing), so the HFS+ copy is uncompressed. On a
@@ -20,6 +20,9 @@ set -euo pipefail
 
 [[ $# -ge 4 ]] || { sed -n '2,12p' "$0"; exit 2; }
 os=$(realpath "$1") sysos=$(realpath "$2") appos=$(realpath "$3") out=$4 size=${5:-16G}
+# SIZE "super": fit Pixel 4's super partition (9755951104 bytes = 9304 MiB) and leave its last
+# 8 MiB free for the shim/XNU logs (~4.6 MiB). The root's files must fit in that.
+[[ $size != super ]] || size=9296M
 [[ ! -e $out ]] || { echo "refusing to overwrite $out" >&2; exit 1; }
 
 # Pre-flight tool check

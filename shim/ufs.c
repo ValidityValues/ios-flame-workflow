@@ -4,7 +4,8 @@
  * Runs with the MMU off (all memory Device, so DMA needs no cache
  * maintenance). Takes over the transfer request list with our own buffers
  * and issues one SCSI command at a time on LUN 0. Writes are restricted to
- * the scratch area at the end of the userdata partition (ufs_scratch_*),
+ * the scratch area at the end of the iOS root partition (ufs_scratch_*;
+ * SHIM_UFS_PART, default userdata; the full build uses super),
  * nothing else on the device is ever written.
  *
  * Register layout and descriptor formats: JEDEC UFSHCI (JESD223).
@@ -56,7 +57,15 @@ static struct ucd ucd __attribute__((aligned(128)));
 static uint8_t data[XFER_BLOCKS * BLOCK] __attribute__((aligned(4096)));
 
 static int ready;
-static uint64_t part_first, part_blocks;	/* userdata, in 4K blocks */
+/* GPT name of the iOS root partition: -DSHIM_UFS_PART=super (must match XNU's ufsroot=). */
+#ifndef SHIM_UFS_PART
+#define SHIM_UFS_PART userdata
+#endif
+#define UFS_STR2(x)	#x
+#define UFS_STR(x)	UFS_STR2(x)
+static const char ufs_part[] = UFS_STR(SHIM_UFS_PART);
+
+static uint64_t part_first, part_blocks;	/* the root partition, in 4K blocks */
 static uint64_t scratch_first;
 
 static uint64_t ticks(void)
@@ -143,7 +152,7 @@ static uint32_t le32(const uint8_t *p)
 	return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-static int find_userdata(void)
+static int find_partition(void)
 {
 	if (read_blocks(1, 1, data))
 		return -1;
@@ -157,11 +166,14 @@ static int find_userdata(void)
 		return -3;
 	if (read_blocks(entry_lba, (nent * esz + BLOCK - 1) / BLOCK, data))
 		return -4;
-	static const char want[] = "userdata";
+	const char *want = ufs_part;
+	int wlen = (int)sizeof(ufs_part);	/* with the terminating NUL */
+	if (wlen > 36)
+		return -6;
 	for (uint32_t i = 0; i < nent; i++) {
 		const uint8_t *e = data + i * esz;
 		int match = 1;
-		for (int c = 0; c < 9; c++)
+		for (int c = 0; c < wlen; c++)
 			if (e[56 + 2 * c] != (uint8_t)want[c] || e[57 + 2 * c])
 				match = 0;
 		if (!match)
@@ -206,19 +218,19 @@ int ufs_init(void)
 			break;
 	}
 	log_printf("ufs: test unit ready rc=%x\n", rc);
-	int prc = find_userdata();
+	int prc = find_partition();
 	if (prc) {
-		log_printf("ufs: userdata not found (%d)\n", prc);
+		log_printf("ufs: %s not found (%d)\n", ufs_part, prc);
 		return -1;
 	}
 	if (part_blocks < UFS_SCRATCH_TAIL + UFS_RESCUE_BLOCKS + 16) {
-		log_printf("ufs: userdata too small\n");
+		log_printf("ufs: %s too small\n", ufs_part);
 		return -1;
 	}
 	scratch_first = part_first + part_blocks - UFS_SCRATCH_TAIL;
 	ready = 1;
-	log_printf("ufs: userdata first=%lx blocks=%lx scratch=%lx+%x\n",
-		   part_first, part_blocks, scratch_first, UFS_SCRATCH_BLOCKS);
+	log_printf("ufs: %s first=%lx blocks=%lx scratch=%lx+%x\n",
+		   ufs_part, part_first, part_blocks, scratch_first, UFS_SCRATCH_BLOCKS);
 	return 0;
 }
 

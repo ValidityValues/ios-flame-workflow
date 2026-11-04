@@ -1,5 +1,6 @@
 #!/bin/bash
-# Read the logs a test run left at the end of userdata, from TWRP (adb root).
+# Read the logs a test run left at the end of the iOS root partition, from TWRP (adb root).
+# FLAME_ROOT_PART: its GPT name (default super; userdata for the old layout).
 #
 #   tools/flame-log-pull.sh shim OUT.txt   shim probe log (64 blocks before the XNU ring)
 #   tools/flame-log-pull.sh xnu  OUT.bin   XNU persistent console ring (last 1025 blocks)
@@ -7,10 +8,10 @@
 #                                          last console bytes, saved by the next shim boot)
 #
 # Layout: shim/ufs.h. The partition is found by name, so this works whatever
-# sdaN userdata is.
+# sdaN the partition is.
 set -euo pipefail
 what=$1 out=$2
-dev=$(adb shell readlink -f /dev/block/by-name/userdata | tr -d '\r')
+dev=$(adb shell readlink -f /dev/block/by-name/${FLAME_ROOT_PART:-super} | tr -d '\r')
 blocks=$(( $(adb shell blockdev --getsize64 "$dev" | tr -d '\r') / 4096 ))
 case $what in
 shim) skip=$((blocks - 1025 - 64)) count=64 ;;
