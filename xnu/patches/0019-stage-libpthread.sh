@@ -15,8 +15,14 @@ pthread_sha=a6c70ca0e544347a0377babf748f831577ec24f9
 pthread_tmp=$(mktemp -d)
 trap 'rm -rf "$pthread_tmp"' EXIT
 git init -q "$pthread_tmp"
-git -C "$pthread_tmp" fetch -q --depth 1 \
-    https://github.com/apple-oss-distributions/libpthread "$pthread_sha"
+# Git hosts answer 502 now and then (bearssl.org did in CI): retry before failing the build.
+for try in 1 2 3 4 5; do
+    git -C "$pthread_tmp" fetch -q --depth 1 \
+        https://github.com/apple-oss-distributions/libpthread "$pthread_sha" && break
+    [[ $try == 5 ]] && exit 1
+    echo "fetch https://github.com/apple-oss-distributions/libpthread failed (try $try/5), retrying" >&2
+    sleep $((try * 10))
+done
 git -C "$pthread_tmp" checkout -q FETCH_HEAD
 [[ "$(git -C "$pthread_tmp" rev-parse HEAD)" == "$pthread_sha" ]]
 

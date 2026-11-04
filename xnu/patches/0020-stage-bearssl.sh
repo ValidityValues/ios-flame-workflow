@@ -7,8 +7,23 @@ bearssl_sha=7bea48e5e850ab4cafbe68d3765cdaba13a86d6f
 bearssl_tmp=$(mktemp -d)
 trap 'rm -rf "$bearssl_tmp"' EXIT
 git init -q "$bearssl_tmp"
-git -C "$bearssl_tmp" fetch -q --depth 1 \
-    https://www.bearssl.org/git/BearSSL "$bearssl_sha"
+# bearssl.org's git server answers 502 for hours at a time (it did in CI): retry, then
+# fall back to GitHub copies of the same history. The commit id pins the exact tree, and
+# it is checked below, so a mirror cannot change what gets built.
+fetched=
+for try in 1 2 3; do
+    for url in https://www.bearssl.org/git/BearSSL https://github.com/mitchcapper/BearSSL \
+        https://github.com/edmaren/BearSSL; do
+        if git -C "$bearssl_tmp" fetch -q --depth 1 "$url" "$bearssl_sha"; then
+            fetched=$url
+            break 2
+        fi
+        echo "fetch $url failed (try $try/3)" >&2
+    done
+    sleep $((try * 10))
+done
+[[ -n $fetched ]] || exit 1
+echo "BearSSL $bearssl_sha from $fetched"
 git -C "$bearssl_tmp" checkout -q FETCH_HEAD
 [[ "$(git -C "$bearssl_tmp" rev-parse HEAD)" == "$bearssl_sha" ]]
 python3 - "$bearssl_tmp" <<'PY'
