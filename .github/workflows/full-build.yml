@@ -25,6 +25,11 @@ on:
         options:
           - super
           - userdata
+      gpu_firmware:
+        description: Embed the Adreno 640 firmware from Google's factory vendor.img (sweetgpu=1)
+        type: boolean
+        required: true
+        default: true
   push:
     branches: [main, boot-super]
     paths:
@@ -349,7 +354,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install llvm lld lz4 glslang bison flex cmake ninja pkg-config
+          brew install llvm lld lz4 glslang bison flex cmake ninja pkg-config e2fsprogs
           brew tap blacktop/tap
           if brew trust --help >/dev/null 2>&1; then
             brew trust blacktop/tap
@@ -376,6 +381,7 @@ jobs:
         shell: bash
         env:
           ROOT_PARTITION: ${{ inputs.root_partition || 'super' }}
+          GPU_FIRMWARE: ${{ (inputs.gpu_firmware == false) && '0' || '1' }}
         run: |
           set -o pipefail
           bash tools/ci-full-build.sh ci-input/kernel ci-input/buildtree full-build-output 2>&1 | tee full-build.log

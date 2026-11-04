@@ -117,13 +117,38 @@ if [[ -n "$NESTED" ]]; then
     unzip -p "$TMP/factory.zip" "$NESTED" > "$TMP/image-flame.zip"
     rm -f "$TMP/factory.zip"
     unzip -p "$TMP/image-flame.zip" boot.img > "$ROOT/stock/boot.img"
+    IMAGE_ZIP="$TMP/image-flame.zip"
 else
     unzip -p "$TMP/factory.zip" boot.img > "$ROOT/stock/boot.img"
+    IMAGE_ZIP="$TMP/factory.zip"
 fi
 [[ -s "$ROOT/stock/boot.img" ]] || fail "Google factory archive did not contain boot.img"
 python3 tools/unpack_bootv2.py "$ROOT/stock/boot.img" "$ROOT/stock/unpacked" > "$OUT/logs/unpack-boot.txt"
 [[ -s "$ROOT/stock/unpacked/dtb" ]] || fail "Stock Android boot.img did not contain a DTB"
 cp "$ROOT/stock/unpacked/dtb" "$ROOT/stock/dtb"
+
+# Adreno 640 firmware for the GPU (bsd/dev/sweet_gpu.c reads /chosen/gpufw,* from the ADT):
+# taken from /firmware in the same verified factory image's vendor.img (raw ext4, read with
+# e2fsprogs' debugfs; nothing is mounted). GPU_FIRMWARE=0 builds the old CPU-only image.
+GPU_FIRMWARE="${GPU_FIRMWARE:-1}"
+GPUFW_DIR="$ROOT/research/gpu/fw"
+GPU_FILES=(a640_gmu.bin a630_sqe.fw a640_zap.mdt a640_zap.b02)
+if [[ "$GPU_FIRMWARE" = 1 ]]; then
+    DEBUGFS="$(brew --prefix e2fsprogs 2>/dev/null || true)/sbin/debugfs"
+    [[ -x "$DEBUGFS" ]] || DEBUGFS="$(command -v debugfs || true)"
+    [[ -n "$DEBUGFS" && -x "$DEBUGFS" ]] || fail "debugfs (e2fsprogs) is required to read vendor.img"
+    unzip -p "$IMAGE_ZIP" vendor.img > "$TMP/vendor.img"
+    [[ -s "$TMP/vendor.img" ]] || fail "Google factory archive did not contain vendor.img"
+    mkdir -p "$GPUFW_DIR"
+    for f in "${GPU_FILES[@]}"; do
+        rm -f "$GPUFW_DIR/$f"
+        "$DEBUGFS" -R "dump /firmware/$f $GPUFW_DIR/$f" "$TMP/vendor.img" > /dev/null 2>&1
+        [[ -s "$GPUFW_DIR/$f" ]] || fail "vendor.img has no /firmware/$f"
+    done
+    rm -f "$TMP/vendor.img"
+    (cd "$GPUFW_DIR" && shasum -a 256 "${GPU_FILES[@]}") > "$OUT/logs/gpu-firmware.sha256"
+    cat "$OUT/logs/gpu-firmware.sha256"
+fi
 
 # The shim loads XNU from the payload; the iOS HFS+ root must already be in ROOT_PARTITION
 # (GPT name on UFS LUN 0, default super). XNU mounts it (ufsroot=), and the shim and XNU keep
@@ -131,7 +156,12 @@ cp "$ROOT/stock/unpacked/dtb" "$ROOT/stock/dtb"
 ROOT_PARTITION="${ROOT_PARTITION:-super}"
 [[ "$ROOT_PARTITION" =~ ^[A-Za-z0-9_]{1,35}$ ]] || fail "Invalid ROOT_PARTITION: $ROOT_PARTITION"
 CMDLINE="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsroot=$ROOT_PARTITION ufsrw=1 rootrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 flamereboot=300 sweetusb=2 sweetusbframes=0 sweetmtl=2"
-python3 tools/mkpayload.py "$KERNEL" "$ROOT/work/boot/flame-hi.adt" "$TMP/payload.bin" --cmdline "$CMDLINE" > "$OUT/logs/mkpayload.txt"
+GPUFW_ARGS=()
+if [[ "$GPU_FIRMWARE" = 1 ]]; then
+    CMDLINE="$CMDLINE sweetgpu=1"
+    GPUFW_ARGS=(--gpufw "$GPUFW_DIR")
+fi
+python3 tools/mkpayload.py "$KERNEL" "$ROOT/work/boot/flame-hi.adt" "$TMP/payload.bin" --cmdline "$CMDLINE" ${GPUFW_ARGS[@]+"${GPUFW_ARGS[@]}"} > "$OUT/logs/mkpayload.txt"
 SHIM_CFLAGS="-DSHIM_UFS_PART=$ROOT_PARTITION" shim/build.sh "$TMP/payload.bin" "$OUT/release/boot/flame-boot.img" > "$OUT/logs/shim-build.txt" 2>&1
 echo "$CMDLINE" > "$OUT/release/boot/cmdline.txt"
 
@@ -165,7 +195,7 @@ This kit was built by GitHub Actions for Google Pixel 4 (flame), with XNU 8796 a
 
 This artifact is not a complete iOS installation. It intentionally does not include Apple's multi-gigabyte iOS root volume, Google's full factory archive, Qualcomm firmware dumps, or private modem/calibration backups. The iOS HFS+ root must already be prepared from the iPhone X iOS 16.7.16 (20H392) IPSW and written to the Pixel 4 partition the boot image uses (super by default; see boot/cmdline.txt). Back up super first (for example from TWRP: adb exec-out 'dd if=/dev/block/by-name/super bs=4194304' > super-backup.img) so Android can be restored by writing it back. The HFS+ image must be at least 8 MiB smaller than the partition: the last ~4.6 MiB hold the boot logs. Without that root volume, XNU cannot reach SpringBoard.
 
-The boot image also does not embed Qualcomm GPU firmware. Metal 2 and Turnip were compiled and are included, but hardware-accelerated graphics requires the matching firmware extracted locally from your official Pixel 4 factory image, then added to the ADT/payload following the repository's tools/mkpayload.py instructions.
+Unless the workflow ran with gpu_firmware off, the boot image embeds the Adreno 640 firmware (a640_gmu.bin, a630_sqe.fw, a640_zap.mdt, a640_zap.b02) from /firmware in Google's official Pixel 4 TP1A.221005.002.B2 vendor.img and boots with sweetgpu=1, so Metal 2 runs on Turnip and the GPU scales frames onto the panel. Checksums are in logs/gpu-firmware.sha256 of the build log artifact; boot/cmdline.txt shows the boot arguments.
 
 ## Boot
 
@@ -196,6 +226,7 @@ Project: ios-flame-workflow
 Repository commit: ${GITHUB_SHA:-local}
 Kernel: $KERNEL_NAME
 iOS root partition: $ROOT_PARTITION
+GPU firmware embedded: $GPU_FIRMWARE
 Kernel SHA-256: $(shasum -a 256 "$OUT/release/kernel/$KERNEL_NAME" | awk '{print $1}')
 XNU generation: macOS 13.5 / xnu-8796.141.3
 Mesa commit: $MESA_SHA
